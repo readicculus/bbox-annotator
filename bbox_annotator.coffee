@@ -20,6 +20,7 @@ class BBoxSelector
     @selector.css
       "border-width": @border_width
     @selector.hide()
+    @selector.entry = null
     this.create_label_box(options)
 
   # Initializes a label input box.
@@ -74,6 +75,33 @@ class BBoxSelector
     document.onselectstart = () ->
       false
 
+
+  furthest_corner: (entry, x, y) ->
+    x1 = entry.left
+    x2 = x1 + entry.width
+    y1 = entry.top
+    y2 = y1 + entry.height
+    # Select the point opposite of the 
+    furthest_x = if (x - x1 < x2 - x) then x2 else x1
+    furthest_y = if (y-y1 < y2-y) then y2 else y1
+    f =
+      x: furthest_x
+      y: furthest_y
+    f
+
+  # When a new selection is made.
+  selected: (entry, e) ->
+    @selector.entry = entry
+    a=this.crop(e.pageX, e.pageY)
+    
+    @pointer = this.furthest_corner(entry, a.x, a.y)
+    @offset = @pointer
+    this.refresh()
+    @selector.show()
+    $('body').css('cursor', 'crosshair')
+    document.onselectstart = () ->
+      false
+
   # When a selection updates.
   update_rectangle: (pageX, pageY) ->
     @pointer = this.crop(pageX, pageY)
@@ -91,10 +119,19 @@ class BBoxSelector
   finish: (options) ->
     @label_box.hide()
     @selector.hide()
-    data = this.rectangle()
-    data.label = $.trim(@label_input.val().toLowerCase())
-    @label_input.val('') unless options.input_method == 'fixed'
-    data
+
+    if @selector.entry
+      data = this.rectangle()
+      data.label = $.trim(@label_input.val().toLowerCase())
+      data.id = @selector.entry.id
+      @selector.entry = null
+      data
+    else
+      data = this.rectangle()
+      data.label = $.trim(@label_input.val().toLowerCase())
+      data.id = '_' + Math.random().toString(36).substr(2, 9)
+      @label_input.val('') unless options.input_method == 'fixed'
+      data
 
   # Get a rectangle.
   rectangle: () ->
@@ -172,18 +209,31 @@ class @BBoxAnnotator
   initialize_events: (options) ->
     status = 'free'
     @hit_menuitem = false
+    @hit_box = false
     annotator = this
     selector = annotator.selector
     @annotator_element.mousedown (e) ->
-      unless annotator.hit_menuitem
+      # @hitbox = $(e.target).is('.annotated_bounding_box')
+      unless annotator.hit_menuitem or annotator.hit_box
         switch status
           when 'free', 'input'
             selector.get_input_element().blur() if status == 'input'
             if e.which == 1 # left button
               selector.start(e.pageX, e.pageY)
               status = 'hold'
+
+      # adjust bounding box
+      if annotator.hit_box
+        id = $(e.target).attr('id')
+        for entry in annotator.entries
+          if entry.id == id
+            selector.selected(entry, e)
+            status = 'hold'
+
       annotator.hit_menuitem = false
+      # annotator.hit_box = false
       true
+
     $(window).mousemove (e) ->
       switch status
         when 'hold'
@@ -221,8 +271,11 @@ class @BBoxAnnotator
       annotator.hit_menuitem = true
     selector.get_input_element().mouseup (e) ->
       annotator.hit_menuitem = true
-    selector.get_input_element().parent().mousedown (e) ->
-      annotator.hit_menuitem = true
+    # selector.get_input_element().parent().mousedown (e) ->
+    #   annotator.hit_menuitem = true
+
+  adjust_entry: (id) ->
+    true
 
   # Add a new entry.
   add_entry: (entry) ->
@@ -230,8 +283,18 @@ class @BBoxAnnotator
       @annotator_element.find(".annotated_bounding_box").detach()
       @entries.splice 0
 
-    @entries.push entry
-    box_element = $('<div class="annotated_bounding_box"></div>')
+    box_element = null
+    if this.hit_box
+      box_element = $('#'+entry.id)
+      for en, idx in @entries
+        if en.id == entry.id
+          @entries[idx] = entry
+          this.hit_box = false
+      this.hit_box = false
+    else
+      box_element = $('<div class="annotated_bounding_box" id="'+entry.id+'"></div>')
+      @entries.push entry
+
     box_element.appendTo(@image_frame).css
       "border": @border_width + "px solid rgb(127,255,127)",
       "position": "absolute",
@@ -279,13 +342,24 @@ class @BBoxAnnotator
     box_element.hover ((e) -> close_button.show()), ((e) -> close_button.hide())
     close_button.mousedown (e) ->
       annotator.hit_menuitem = true
+      annotator.hit_box = false
+
     close_button.click (e) ->
       clicked_box = close_button.parent(".annotated_bounding_box")
       index = clicked_box.prevAll(".annotated_bounding_box").length
       clicked_box.detach()
       annotator.entries.splice index, 1
       annotator.onchange annotator.entries
+      annotator.hit_menuitem = false
+
     close_button.hide()
+
+
+    # Set box mousedown adjust event
+    box_element.mousedown (e) ->
+      annotator.hit_box = true
+
+
 
   # Clear all entries.
   clear_all: (e) ->
